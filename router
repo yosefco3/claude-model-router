@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# router on|off|status  — toggle the model-routing policy in ~/.claude/CLAUDE.md
+# Applies to NEW claude sessions (CLAUDE.md is read at session start).
+set -euo pipefail
+
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
+DATA_DIR="$CLAUDE_DIR/model-router"
+START='<!-- model-router:start -->'
+END='<!-- model-router:end -->'
+
+usage() { echo "usage: router on|off|status"; exit 1; }
+[ $# -eq 1 ] || usage
+
+status() {
+  if ! [ -f "$CLAUDE_MD" ] || ! grep -qF "$START" "$CLAUDE_MD"; then
+    echo "not installed (run install.sh)"; return
+  fi
+  if grep -qF "Model routing policy: OFF" "$CLAUDE_MD"; then echo "off"; else echo "on"; fi
+}
+
+swap() {
+  local src="$1"
+  [ -f "$src" ] || { echo "missing $src — re-run install.sh"; exit 1; }
+  python3 - "$CLAUDE_MD" "$src" "$START" "$END" <<'PY'
+import sys, re
+path, src, start, end = sys.argv[1:5]
+text = open(path, encoding="utf-8").read() if __import__("os").path.exists(path) else ""
+block = open(src, encoding="utf-8").read().strip()
+pattern = re.compile(re.escape(start) + r".*?" + re.escape(end), re.S)
+if pattern.search(text):
+    text = pattern.sub(lambda m: block, text, count=1)
+else:
+    text = (text.rstrip() + "\n\n" if text.strip() else "") + block + "\n"
+open(path, "w", encoding="utf-8").write(text)
+PY
+}
+
+case "$1" in
+  on)     swap "$DATA_DIR/ROUTING.md";     echo "routing: on  (takes effect in new claude sessions)";;
+  off)    swap "$DATA_DIR/ROUTING-OFF.md"; echo "routing: off (takes effect in new claude sessions)";;
+  status) status;;
+  *) usage;;
+esac
