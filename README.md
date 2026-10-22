@@ -28,14 +28,22 @@ git clone https://github.com/yosefco3/claude-model-router.git
 cd claude-model-router && ./install.sh     # installs the `router` CLI to ~/.local/bin
 ```
 
-Then install the plugin, either from a terminal:
+Then install the plugin. Pick **one** route:
 
-```bash
-claude plugin marketplace add yosefco3/claude-model-router
-claude plugin install model-router@claude-model-router
-```
+- **Recommended, on claude.ai or in the Claude desktop app:** Customize, Plugins, Add, Add marketplace, `yosefco3/claude-model-router`, then open model-router and make sure its toggle is on. This route also reaches Cowork and syncs to every machine signed in to the account. Start a new session (or Cowork task) afterwards.
+- **Terminal only, if you don't use the desktop app:**
 
-or on claude.ai: Customize, Plugins, Add, Add marketplace, `yosefco3/claude-model-router`. That route also reaches Cowork and syncs to every machine signed in to the account.
+  ```bash
+  claude plugin marketplace add yosefco3/claude-model-router
+  claude plugin install model-router@claude-model-router
+  ```
+
+> **Don't use both routes on one machine.** The desktop app adds the marketplace through the local Claude Code CLI using the full URL, while `claude plugin marketplace add owner/repo` registers it under the GitHub shorthand. The second registration of the same name is refused; the desktop dialog only says "Failed to add marketplace", and its log (`~/.config/Claude/logs/main.log` on Linux) shows `its source doesn't match its extraKnownMarketplaces entry`. To switch to the desktop route, remove the terminal registration first:
+>
+> ```bash
+> claude plugin uninstall model-router@claude-model-router
+> claude plugin marketplace remove claude-model-router
+> ```
 
 `install.sh` is safe to re-run. It does not touch `~/.claude/agents`, `settings.json` or `CLAUDE.md`.
 

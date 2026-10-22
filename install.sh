@@ -32,13 +32,19 @@ echo "Installed kit:   $DATA_DIR/kit"
 
 cat <<'MSG'
 
-CLI installed. Now install the plugin itself (this is what delegates, in every session):
+CLI installed. Now install the plugin itself (this is what delegates, in every session).
+Pick ONE route:
 
-  claude plugin marketplace add yosefco3/claude-model-router
-  claude plugin install model-router@claude-model-router
+  Recommended (claude.ai or the Claude desktop app; also reaches Cowork and syncs
+  to every machine signed in to the account):
+    Customize -> Plugins -> Add -> Add marketplace -> yosefco3/claude-model-router
 
-or on claude.ai: Customize -> Plugins -> Add -> Add marketplace -> yosefco3/claude-model-router
-(that route also reaches Cowork and syncs to every machine signed in to the account).
+  Terminal only, if you don't use the desktop app:
+    claude plugin marketplace add yosefco3/claude-model-router
+    claude plugin install model-router@claude-model-router
+
+Using both on one machine fails with "source doesn't match its extraKnownMarketplaces
+entry" (see README, Install).
 
 Then:  router status | router off | router on | router stats | router install-repo <path>
 MSG
