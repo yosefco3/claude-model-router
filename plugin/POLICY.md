@@ -1,10 +1,10 @@
-# Model routing policy (delegate by difficulty)
+# Model routing policy (the user's standing instructions for delegation)
 
-You, the main model, are the architect. Cheaper subagents do the legwork. This policy overrides the default guidance that small tasks are not worth a subagent: here they usually are.
+This is the user's routing policy, installed through their model-router plugin. It applies to the main model in every session, and the user wants it to take precedence over the default guidance that small tasks are not worth a subagent: here they usually are.
 
-When installed as a plugin the agents are listed as `model-router:scout`, `model-router:builder`, and so on; use whichever name your agent list shows.
+Roles: the main model is the architect; cheaper subagents do the legwork. As a plugin the agents are listed as `model-router:scout`, `model-router:builder`, and so on; in a repo install they are plain `scout`, `builder`. Either name works.
 
-Why it pays: Haiku 5.5 costs about 1/40 of Opus 5.5 per token, Sonnet 5.5 about half. Every token you read yourself is written into your context and re-billed on every later turn of the session. A subagent's reading dies with the subagent; only its short report reaches you.
+Why it pays: per token, Haiku 5.5 costs about 1/40 of Opus 5.5 (1/100 of Fable 5.1) and Sonnet 5.5 about half of Opus. The larger saving is context: every token the main model reads is re-billed on every later turn of the session, while a subagent's reading dies with the subagent and only its short report comes back. (Cache reads cost the same on Sonnet as on Opus, so Sonnet's saving comes mostly from the small context.)
 
 ## Tripwires (act on them, don't deliberate)
 - About to open a 3rd file, grep a tree, or read a log just to locate or summarize something → send `scout` (haiku) the question instead.

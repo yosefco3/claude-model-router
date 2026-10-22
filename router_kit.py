@@ -12,10 +12,12 @@ repo's own .claude/. `install-repo` copies the router kit there:
 
 usage: router_kit.py install-repo <repo_path> [--kit <dir>] [--force]
 
-Idempotent, and no half installs: everything is read and validated in memory
-before the first file is written. An agent file that already exists and is
-neither our untouched earlier copy nor identical to the new one is treated as
-foreign and blocks the install; --force replaces it after saving <name>.bak.
+Idempotent, and no half installs: everything is read and validated in memory,
+and every target is checked for writability, before the first file is written.
+Only files that look like agents (frontmatter with a name:) are taken from the
+kit's agents/ dir. An agent file that already exists and is neither our
+untouched earlier copy nor identical to the new one is treated as foreign and
+blocks the install; --force replaces it after saving <name>.bak.
 Never commits. The only git call is the read-only `git check-ignore`, used for a
 warning. Stdlib only.
 """
@@ -31,8 +33,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-HOOK_COMMAND = 'python3 "$CLAUDE_PROJECT_DIR/.claude/model-router/router_nudge.py" --repo'
+# "|| true": if the script is missing in a checkout, python3 exits 2, and exit 2 from a
+# UserPromptSubmit hook blocks every prompt. The script itself always exits 0.
+HOOK_COMMAND = 'python3 "$CLAUDE_PROJECT_DIR/.claude/model-router/router_nudge.py" --repo || true'
 HOOK_MARKER = "model-router/router_nudge.py"
+# Commands written by earlier kit versions; re-running install-repo upgrades these in place.
+LEGACY_HOOK_COMMANDS = {
+    'python3 "$CLAUDE_PROJECT_DIR/.claude/model-router/router_nudge.py" --repo',  # v2.0.0
+}
 HOOK_TIMEOUT = 10
 POST_TOOL_MATCHER = "Read|Grep|Glob|Bash|WebFetch|WebSearch|Agent|Task"
 EVENTS = ("SessionStart", "UserPromptSubmit", "PostToolUse")
@@ -77,6 +85,43 @@ def _atomic_write(path: Path, data: bytes) -> None:
         except OSError:
             pass
         raise
+
+
+def kit_agent_files(kit: Path) -> list[Path]:
+    """agents/*.md of the kit that look like agent definitions (a stray README.md is skipped)."""
+    return [p for p in sorted((kit / "agents").glob("*.md")) if _is_agent_file(p)]
+
+
+def _is_agent_file(path: Path) -> bool:
+    """True if the file opens with a `---` frontmatter block that contains a `name:` line."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    if not lines or lines[0].strip() != "---":
+        return False
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return False  # frontmatter ended without a name
+        if re.match(r"name:\s*\S", line):
+            return True
+    return False
+
+
+def _check_writable(paths: list[Path]) -> None:
+    """KitError for the first target we could not write. Runs before anything is written."""
+    for path in paths:
+        target = Path(os.path.realpath(path)) if path.is_symlink() else path
+        if os.path.lexists(target):
+            if not os.access(target, os.W_OK):
+                raise KitError(f"{path} is not writable; fix its permissions and re-run (nothing was written)")
+            continue
+        parent = target.parent
+        while not os.path.lexists(parent):
+            parent = parent.parent
+        if not os.access(parent, os.W_OK | os.X_OK):
+            raise KitError(f"{parent} is not writable (needed to create {path}); "
+                           "fix its permissions and re-run (nothing was written)")
 
 
 def _read_existing(path: Path) -> bytes | None:
@@ -139,6 +184,13 @@ def merge_settings(settings, label: str = "settings.json") -> bool:
     for event in EVENTS:
         groups = hooks.get(event, [])
         if _has_router_hook(groups):
+            # Entries an earlier kit wrote verbatim are upgraded in place; a hand-written
+            # command that merely mentions our script is left alone.
+            for group in groups:
+                for hook in group["hooks"]:
+                    if hook.get("command") in LEGACY_HOOK_COMMANDS:
+                        hook["command"] = HOOK_COMMAND
+                        changed = True
             continue
         group: dict = {}
         if event == "PostToolUse":
@@ -187,7 +239,7 @@ def _install_repo(kit: Path, repo: Path, force: bool) -> list[str]:
     repo = repo.resolve()
 
     # ---- phase 1: read and validate everything; nothing is written here ----
-    agent_files = sorted((kit / "agents").glob("*.md"))
+    agent_files = kit_agent_files(kit)
     nudge_src = kit / "hooks" / "router_nudge.py"
     policy_src = kit / "POLICY.md"
     if not agent_files or not nudge_src.is_file() or not policy_src.is_file():
@@ -203,15 +255,17 @@ def _install_repo(kit: Path, repo: Path, force: bool) -> list[str]:
     settings_path = claude / "settings.json"
     old_settings = _read_existing(settings_path)
     indent = 2
+    crlf = False
     if old_settings is None:
         settings: object = {}
     else:
         try:
             text = old_settings.decode("utf-8")
-            settings = json.loads(text)
+            settings = json.loads(text) if text.strip() else {}  # an empty file counts as {}
         except ValueError as e:
             raise KitError(f"{settings_path} is not valid JSON ({e}); fix it and re-run") from e
         indent = _detect_indent(text)
+        crlf = "\r\n" in text
     settings_changed = merge_settings(settings, str(settings_path.relative_to(repo)))
 
     manifest_path = data_dir / MANIFEST_NAME
@@ -257,7 +311,27 @@ def _install_repo(kit: Path, repo: Path, force: bool) -> list[str]:
     old_manifest = _read_existing(manifest_path)
     manifest_state = "created" if old_manifest is None else "unchanged" if old_manifest == manifest_bytes else "updated"
 
-    settings_bytes = (json.dumps(settings, indent=indent, ensure_ascii=False) + "\n").encode("utf-8")
+    write_settings = old_settings is None or settings_changed
+    settings_bytes = b""
+    if write_settings:  # a file that needs no change is never re-serialized
+        try:
+            settings_text = json.dumps(settings, indent=indent, ensure_ascii=False, allow_nan=False) + "\n"
+        except ValueError as e:  # NaN / Infinity parse fine but are not JSON
+            raise KitError(f"{settings_path.relative_to(repo)} contains a non-JSON number "
+                           "(NaN or Infinity); fix it and re-run") from e
+        if crlf:
+            settings_text = settings_text.replace("\n", "\r\n")
+        settings_bytes = settings_text.encode("utf-8")
+
+    # ---- preflight: every file we are about to write or create must be writable ----
+    targets = [dst for _, dst, state in plan if state != "unchanged"]
+    targets += [_backup_path(dst) for _, dst, state in plan if state == "replaced"]
+    if manifest_state != "unchanged":
+        targets.append(manifest_path)
+    targets += [dst for _, dst, state in extras if state != "unchanged"]
+    if write_settings:
+        targets.append(settings_path)
+    _check_writable(targets)
 
     # ---- phase 2: write ----
     report: list[str] = []
@@ -276,7 +350,7 @@ def _install_repo(kit: Path, repo: Path, force: bool) -> list[str]:
         if state != "unchanged":
             _atomic_write(dst, new)
         report.append(_line(state, dst, repo))
-    if old_settings is None or settings_changed:
+    if write_settings:
         _atomic_write(settings_path, settings_bytes)
         report.append(_line("created" if old_settings is None else "updated", settings_path, repo))
     else:
@@ -284,7 +358,18 @@ def _install_repo(kit: Path, repo: Path, force: bool) -> list[str]:
     return report
 
 
-def repo_warnings(repo_path: Path | str) -> list[str]:
+def installed_paths(kit: Path | str | None = None) -> list[str]:
+    """Repo-relative paths install-repo writes (the agents are those of `kit`, else the default kit)."""
+    try:
+        names = [p.name for p in kit_agent_files(Path(kit) if kit else default_kit_dir())]
+    except OSError:
+        names = []
+    return ([".claude/settings.json", ".claude/model-router/router_nudge.py",
+             ".claude/model-router/POLICY.md", ".claude/model-router/manifest.json"]
+            + [f".claude/agents/{n}" for n in names])
+
+
+def repo_warnings(repo_path: Path | str, kit: Path | str | None = None) -> list[str]:
     """Non-fatal problems that would stop cloud sessions from seeing the install."""
     repo = Path(repo_path).resolve()
     if not (repo / ".git").exists():
@@ -292,15 +377,18 @@ def repo_warnings(repo_path: Path | str) -> list[str]:
     git = shutil.which("git")
     if not git:
         return []
+    paths = installed_paths(kit)
     try:
-        r = subprocess.run([git, "-C", str(repo), "check-ignore", "-q", ".claude/settings.json"],
-                           capture_output=True, timeout=10)
+        r = subprocess.run([git, "-C", str(repo), "check-ignore", "--", *paths],
+                           capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return []
-    if r.returncode == 0:
-        return [".claude/settings.json is git-ignored, so cloud sessions will not get the hooks; "
-                "remove the ignore rule or add the files with `git add -f .claude`"]
-    return []
+    if r.returncode != 0:  # 1: none ignored, 128: not usable as a git repo
+        return []
+    ignored = [line.strip() for line in r.stdout.splitlines() if line.strip()]
+    return ["these installed paths are git-ignored: " + ", ".join(ignored or paths) + ". Cloud sessions "
+            "only see committed files, so they will get a broken install (hooks without the script, "
+            "or the script without hooks); remove the ignore rule or add the files with `git add -f .claude`"]
 
 
 def main(argv=None) -> int:
@@ -323,7 +411,7 @@ def main(argv=None) -> int:
     for line in report:
         print(f"  {line}")
     print("Commit .claude/ so cloud sessions pick it up (this tool never commits).")
-    for w in repo_warnings(args.repo_path):
+    for w in repo_warnings(args.repo_path, kit):
         print(f"warning: {w}", file=sys.stderr)
     return 0
 

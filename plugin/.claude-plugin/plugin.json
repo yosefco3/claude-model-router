@@ -1,6 +1,6 @@
 {
   "name": "model-router",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Routing policy and cheap haiku/sonnet subagents (scout, mechanic, builder, test-writer, reviewer) that the main model delegates to by difficulty. Injected at session start via hooks.",
   "author": {
     "name": "yosefco3"

@@ -6,20 +6,21 @@ Usage on Max plans is metered by model cost, so every task a haiku or sonnet sub
 
 - **Five subagents**: `scout` and `mechanic` on haiku, `builder`, `test-writer` and `reviewer` on sonnet. As a plugin they are listed as `model-router:scout`, `model-router:builder`, and so on.
 - **A routing policy** (`plugin/POLICY.md`) injected at session start by a hook. The main model delegates by tripwires (a lookup, a bounded build, a fully specified edit) and keeps architecture, unknown bugs, risky changes and your own prose for itself.
-- **Nudges**: a short reminder on every prompt, and a nudge after 6 read/search/shell/web tool calls in a row without a delegation or a new user message (then every 10).
+- **Nudges**: a short reminder on every prompt, and a nudge after 6 read/search/shell/web tool calls since your last message or the last delegation (edits don't count), then every 10.
 - **A CLI**: `router on|off|status|stats|install-repo`.
 
 ## Where it works
 
 | Surface | How | Status |
 |---|---|---|
-| Local CLI, Desktop Code tab, SSH sessions | the plugin | works |
-| Cowork | the plugin, added on claude.ai (Customize, Plugins) | works |
-| Cloud sessions and routines | per repo: `router install-repo <path>`, then commit `.claude/` | works |
+| Local CLI, Desktop Code tab | the plugin | works |
+| SSH sessions | the plugin (Desktop copies it to the remote host) | per Anthropic's docs; not yet verified |
+| Cowork | the plugin, added on claude.ai (Customize, Plugins) | per Anthropic's docs; not yet verified |
+| Cloud sessions (single-repo, outside a project's threads) and routines | per repo: `router install-repo <path>`, then commit `.claude/` | works |
 | Claude in Slack | repo hooks do not run there | not supported |
 | claude.ai chat | no subagents; pick the model yourself | not possible |
 
-Cloud sessions load neither plugins nor `~/.claude`, only the repo's own `.claude/`. That is why `install-repo` exists. The repo copy of the hook only acts when `CLAUDE_CODE_REMOTE` is set (cloud), so the hooks never double up on your machine. If you open a repo that has the repo copy while the plugin is installed, `/agents` lists both `scout` and `model-router:scout` (same definition, harmless).
+Cloud sessions load neither plugins nor `~/.claude`, only the repo's own `.claude/`. That is why `install-repo` exists. The repo copy of the hook only acts when `CLAUDE_CODE_REMOTE` is set (cloud), so the hooks never double up on your machine (and if a cloud session ever loads the plugin too, the plugin copy steps aside for the repo copy). If you open a repo that has the repo copy while the plugin is installed, `/agents` lists both `scout` and `model-router:scout` (same definition, harmless).
 
 ## Install
 
@@ -27,6 +28,8 @@ Cloud sessions load neither plugins nor `~/.claude`, only the repo's own `.claud
 git clone https://github.com/yosefco3/claude-model-router.git
 cd claude-model-router && ./install.sh     # installs the `router` CLI to ~/.local/bin
 ```
+
+Requires `python3` on PATH (the hooks call it).
 
 Then install the plugin. Pick **one** route:
 
@@ -50,12 +53,12 @@ Then install the plugin. Pick **one** route:
 ## Toggle
 
 ```bash
-router status    # "on" or "off", then "plugin: installed" or "plugin: not installed"
+router status    # "on" or "off", then "plugin: installed (claude-model-router)", "plugin: installed (synced from claude.ai)" or "plugin: not installed"
 router off       # main model does everything; agents only on explicit request
 router on
 ```
 
-The hook reads the flag on every prompt, so it applies from the next prompt with no restart. For a single shell or session, `CLAUDE_ROUTER=off` does the same. `router off` creates `~/.claude/model-router/OFF`.
+The hook reads the flag on every prompt, so it applies from the next prompt with no restart. `router off` stops the reminders and nudges from the next prompt; the policy text already in context stays until a new session. `router on` delivers the policy on the next prompt if the session started while off. For a single shell or session, `CLAUDE_ROUTER=off` does the same. `router off` creates `~/.claude/model-router/OFF`.
 
 ## Stats
 
@@ -65,7 +68,7 @@ router stats --since today    # or 7d, or YYYY-MM-DD
 router stats --json
 ```
 
-Reads your local transcripts and reports spend, subagent share, delegations by agent, and the money saved by running subagent work on a cheaper model.
+Reads your local transcripts and reports spend, subagent share and delegations by agent, plus the money saved by running router-agent work on a cheaper model as two figures: `saved (est.)`, what the same steps would have cost on the main model re-reading its context at each step, and `saved (repriced)`, a floor that only reprices the subagent's own tokens at the main model's rates.
 
 ## Cloud repos
 
@@ -76,9 +79,9 @@ cd ~/code/my-project && git add .claude && git commit -m "Add model router for c
 
 This copies the five agents to `.claude/agents/`, the hook, policy and a `manifest.json` to `.claude/model-router/`, and merges three hook entries into `.claude/settings.json`. Other agents, keys and hooks are left alone, and re-running changes nothing.
 
-- **Nothing is written unless everything checks out.** A `settings.json` that is invalid or has an unexpected shape (for example `hooks` that is not an object) stops the install with exit 1 and no changes. The file keeps its indent, and is replaced atomically.
+- **Validated before writing:** a settings.json that is invalid or has an unexpected shape, a foreign agent file, or an unwritable target stops the install with exit 1 and no changes. The hooks run with `|| true`, so a missing script can never block prompts. settings.json is re-serialized (indent and CRLF kept; escapes normalized, minified files expanded, duplicate keys collapse to the last). Each file is replaced atomically.
 - **Your own agents are protected.** `manifest.json` records the sha256 of each agent file the installer wrote. On re-install, a file that still matches the manifest (our untouched earlier copy) is updated to the new kit version. A file with one of the five names that is neither of those (yours, or hand-edited) blocks the whole install, and the files are named. `router install-repo <path> --force` replaces them, saving each as `<name>.md.bak` first.
-- **It warns, without failing,** if the repo has no `.git`, or if git ignores `.claude/settings.json` (cloud sessions only see what you commit).
+- **It warns, without failing,** if the repo has no `.git`, or if git ignores any installed path (`.claude/settings.json`, the script, the policy, the manifest or an agent file). The warning names the ignored paths: cloud sessions only see what you commit, so they would get a broken install (hooks without the script, or the script without hooks).
 - **Git:** it never commits or stages. The only git call is the read-only `git check-ignore` for that warning. Committing is up to you.
 
 ## Upgrading from v1
@@ -94,7 +97,7 @@ Then run `./install.sh` again to get the new CLI, and install the plugin.
 
 ## Honest expectations
 
-Delegation is the main model's judgment call guided by rules, not a hard router. Expect some misgrades in both directions; tune `plugin/POLICY.md` to taste. Savings show on long sessions, not short chats; 30-50% is a realistic range, not 80%.
+Delegation is the main model's judgment call guided by rules, not a hard router. Expect some misgrades in both directions; tune `plugin/POLICY.md` to taste. Savings depend entirely on how much the main model actually delegates; `router stats` measures it (the `saved (est.)` figure). On the author's first day with the plugin the estimate was about a fifth of total spend, most of it from one session that delegated heavily; a normal day lands lower. Treat the figure as an estimate, not a bill.
 
 ## Acceptance test
 

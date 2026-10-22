@@ -18,7 +18,7 @@ EXISTING_SETTINGS = {
     "permissions": {"allow": ["Bash(ls)"]},
     "hooks": {"PostToolUse": [{"matcher": "Write", "hooks": [{"type": "command", "command": "echo hi"}]}]},
 }
-COMMAND = 'python3 "$CLAUDE_PROJECT_DIR/.claude/model-router/router_nudge.py" --repo'
+COMMAND = 'python3 "$CLAUDE_PROJECT_DIR/.claude/model-router/router_nudge.py" --repo || true'
 
 
 def sha(path):
@@ -133,9 +133,9 @@ class TestInstallRepo(InstallRepoTestCase):
         self.assertIn('\n  "hooks": {\n    "SessionStart"', text)
 
     def test_original_indent_is_kept(self):
-        for label, kw, marker in (("four", {"indent": 4}, '\n    "hooks": {\n        '),
-                                  ("tab", {"indent": "\t"}, '\n\t"hooks": {\n\t\t'),
-                                  ("minified", {}, '\n  "hooks": {\n    ')):
+        for label, kw, marker in (("four", {"indent": 4}, '\n    "hooks": {\n        "SessionStart": [\n            {'),
+                                  ("tab", {"indent": "\t"}, '\n\t"hooks": {\n\t\t"SessionStart": [\n\t\t\t{'),
+                                  ("two", {"indent": 2}, '\n  "hooks": {\n    "SessionStart": [\n      {')):
             with self.subTest(label):
                 shutil.rmtree(self.claude, ignore_errors=True)
                 self.write_settings({"permissions": {"allow": ["x"]}}, **kw)
@@ -143,6 +143,13 @@ class TestInstallRepo(InstallRepoTestCase):
                 text = (self.claude / "settings.json").read_text()
                 self.assertIn(marker, text)
                 self.assertTrue(text.endswith("}\n"))
+
+    def test_minified_settings_are_expanded_with_the_default_two_space_indent(self):
+        self.write_settings({"permissions": {"allow": ["x"]}})  # json.dumps default: one line
+        self.assertEqual(self.run_kit(self.repo).returncode, 0)
+        text = (self.claude / "settings.json").read_text()
+        self.assertIn('\n  "hooks": {\n    "SessionStart"', text)
+        self.assertTrue(text.endswith("}\n"))
 
     def test_non_ascii_settings_preserved(self):
         self.write_settings('{"note": "שלום ✓"}')
@@ -200,6 +207,190 @@ class TestInstallRepo(InstallRepoTestCase):
                               capture_output=True, text=True, env=self.env(), timeout=30)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertInstalled()
+
+
+class TestHookCommand(InstallRepoTestCase):
+    def test_every_merged_command_ends_with_or_true(self):
+        self.write_settings(EXISTING_SETTINGS)
+        self.assertEqual(self.run_kit(self.repo).returncode, 0)
+        for event in EVENTS:
+            for group in self.router_groups(event):
+                for hook in group["hooks"]:
+                    self.assertTrue(hook["command"].endswith(" --repo || true"), hook["command"])
+
+    def test_missing_script_cannot_block_a_prompt(self):
+        # python3 exits 2 for a missing script, and exit 2 from UserPromptSubmit blocks the prompt
+        self.assertEqual(self.run_kit(self.repo).returncode, 0)
+        (self.claude / "model-router" / "router_nudge.py").unlink()
+        env = self.env(CLAUDE_PROJECT_DIR=str(self.repo))
+        bare = subprocess.run(["sh", "-c", COMMAND.removesuffix(" || true")], capture_output=True, env=env, timeout=30)
+        self.assertEqual(bare.returncode, 2)
+        full = subprocess.run(["sh", "-c", COMMAND], capture_output=True, env=env, timeout=30)
+        self.assertEqual(full.returncode, 0)
+        self.assertEqual(self.router_groups("UserPromptSubmit")[0]["hooks"][0]["command"], COMMAND)
+
+    def test_installed_command_runs_the_hook(self):
+        self.assertEqual(self.run_kit(self.repo).returncode, 0)
+        command = self.router_groups("SessionStart")[0]["hooks"][0]["command"]
+        env = self.env(CLAUDE_PROJECT_DIR=str(self.repo), CLAUDE_CODE_REMOTE="1")
+        proc = subprocess.run(["sh", "-c", command], input=json.dumps({"hook_event_name": "SessionStart", "session_id": "s"}),
+                              capture_output=True, text=True, env=env, timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("Tripwires", json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"])
+
+    def test_older_command_without_or_true_is_upgraded_in_place(self):
+        old_cmd = 'python3 "$CLAUDE_PROJECT_DIR/.claude/model-router/router_nudge.py" --repo'
+        old = {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "timeout": 10, "command": old_cmd}]}],
+                         "Stop": [{"hooks": [{"type": "command", "command": "echo keep"}]}]}}
+        self.write_settings(old)
+        self.assertEqual(self.run_kit(self.repo).returncode, 0)
+        got = self.settings()["hooks"]
+        self.assertEqual(len(got["SessionStart"]), 1, "no second router group was added")
+        self.assertTrue(got["SessionStart"][0]["hooks"][0]["command"].endswith("--repo || true"))
+        self.assertEqual(got["SessionStart"][0]["hooks"][0]["timeout"], 10)
+        self.assertEqual(got["Stop"], old["hooks"]["Stop"])
+        # second run: nothing left to change
+        proc = self.run_kit(self.repo)
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("unchanged  .claude/settings.json", proc.stdout)
+
+
+class TestSettingsSerialization(InstallRepoTestCase):
+    def test_crlf_line_endings_are_preserved(self):
+        self.write_settings(json.dumps({"permissions": {"allow": ["x"]}}, indent=2).replace("\n", "\r\n") + "\r\n")
+        self.assertEqual(self.run_kit(self.repo).returncode, 0)
+        raw = (self.claude / "settings.json").read_bytes()
+        self.assertIn(b"\r\n", raw)
+        self.assertNotRegex(raw, rb"(?<!\r)\n")  # every newline is CRLF
+        self.assertTrue(raw.endswith(b"}\r\n"))
+        self.assertEqual(self.settings()["permissions"], {"allow": ["x"]})
+        self.assertEqual(len(self.router_groups("SessionStart")), 1)
+
+    def test_lf_files_stay_lf(self):
+        self.write_settings({"a": 1}, indent=2)
+        self.assertEqual(self.run_kit(self.repo).returncode, 0)
+        self.assertNotIn(b"\r", (self.claude / "settings.json").read_bytes())
+
+    def test_nan_is_refused_and_nothing_is_written(self):
+        for literal in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(literal):
+                shutil.rmtree(self.claude, ignore_errors=True)
+                self.write_settings('{"threshold": %s}' % literal)
+                proc = self.run_kit(self.repo)
+                self.assertEqual(proc.returncode, 1, proc.stdout)
+                self.assertIn("settings.json contains a non-JSON number", proc.stderr)
+                self.assertNotIn("Traceback", proc.stderr)
+                self.assertEqual((self.claude / "settings.json").read_text(), '{"threshold": %s}' % literal)
+                self.assertEqual(self.tree(), [".claude", ".claude/settings.json"])
+
+    def test_nan_in_a_file_that_needs_no_change_is_not_an_error(self):
+        self.assertEqual(self.run_kit(self.repo).returncode, 0)
+        text = (self.claude / "settings.json").read_text().replace('"hooks"', '"threshold": NaN, "hooks"', 1)
+        (self.claude / "settings.json").write_text(text)
+        proc = self.run_kit(self.repo)  # already installed: nothing to serialize
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual((self.claude / "settings.json").read_text(), text)
+
+    def test_empty_or_whitespace_only_settings_count_as_empty_object(self):
+        for label, text in (("empty", ""), ("spaces", "  \n\t\n")):
+            with self.subTest(label):
+                shutil.rmtree(self.claude, ignore_errors=True)
+                self.write_settings(text)
+                proc = self.run_kit(self.repo)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(sorted(self.settings()), ["hooks"])
+                self.assertRegex(proc.stdout, r"updated\s+\.claude/settings\.json")
+                self.assertInstalled()
+
+    def test_literal_null_settings_are_still_refused(self):
+        self.write_settings("null")
+        proc = self.run_kit(self.repo)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("top level is not a JSON object", proc.stderr)
+
+
+class TestAgentDiscovery(InstallRepoTestCase):
+    def test_stray_files_in_the_kit_agents_dir_are_not_installed(self):
+        kit = self.copy_kit()
+        (kit / "agents" / "README.md").write_text("# About these agents\n\nname: not frontmatter\n")
+        (kit / "agents" / "notes.md").write_text("---\ndescription: frontmatter but no name\n---\nbody\n")
+        (kit / "agents" / "draft.md").write_text("name: draft\n---\nbody\n")  # does not open with ---
+        (kit / "agents" / "unterminated.md").write_text("---\ndescription: x\n")
+        proc = self.run_kit(self.repo, kit=kit)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(sorted(p.name for p in (self.claude / "agents").iterdir()), [f"{a}.md" for a in AGENTS])
+        self.assertNotIn("README", proc.stdout)
+        self.assertEqual(sorted(json.loads((self.claude / "model-router" / "manifest.json").read_text())["agents"]),
+                         [f"{a}.md" for a in AGENTS])
+
+    def test_a_valid_extra_agent_in_the_kit_is_installed(self):
+        kit = self.copy_kit()
+        (kit / "agents" / "extra.md").write_text("---\nname: extra\ndescription: another one\n---\nbody\n")
+        self.assertEqual(self.run_kit(self.repo, kit=kit).returncode, 0)
+        self.assertTrue((self.claude / "agents" / "extra.md").exists())
+
+    def test_kit_with_only_stray_files_is_incomplete(self):
+        kit = self.copy_kit()
+        for p in (kit / "agents").glob("*.md"):
+            p.unlink()
+        (kit / "agents" / "README.md").write_text("# nothing here\n")
+        proc = self.run_kit(self.repo, kit=kit)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("router kit incomplete", proc.stderr)
+        self.assertEqual(self.tree(), [])
+
+
+@unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root ignores file permissions")
+class TestWritability(InstallRepoTestCase):
+    def lock(self, path, mode):
+        os.chmod(path, mode)
+        self.addCleanup(os.chmod, path, 0o755)  # runs before the tmp tree is removed
+
+    def test_read_only_model_router_dir_exits_1_and_writes_nothing(self):
+        (self.claude / "model-router").mkdir(parents=True)
+        self.lock(self.claude / "model-router", 0o555)
+        before = self.tree()
+        proc = self.run_kit(self.repo)
+        self.assertEqual(proc.returncode, 1, proc.stdout)
+        self.assertIn(".claude/model-router", proc.stderr)
+        self.assertIn("not writable", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertEqual(self.tree(), before)  # no agents, no settings, no temp files
+
+    def test_read_only_claude_dir_exits_1_and_writes_nothing(self):
+        self.claude.mkdir()
+        self.lock(self.claude, 0o555)
+        before = self.tree()
+        proc = self.run_kit(self.repo)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("not writable", proc.stderr)
+        self.assertEqual(self.tree(), before)
+
+    def test_read_only_agents_dir_exits_1_and_writes_nothing(self):
+        (self.claude / "agents").mkdir(parents=True)
+        self.lock(self.claude / "agents", 0o555)
+        before = self.tree()
+        proc = self.run_kit(self.repo)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn(".claude/agents", proc.stderr)
+        self.assertEqual(self.tree(), before)
+
+    def test_read_only_settings_file_that_needs_a_change_exits_1_and_writes_nothing(self):
+        self.write_settings(EXISTING_SETTINGS)
+        os.chmod(self.claude / "settings.json", 0o444)
+        before = self.tree()
+        text = (self.claude / "settings.json").read_text()
+        proc = self.run_kit(self.repo)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("settings.json", proc.stderr)
+        self.assertEqual(self.tree(), before)
+        self.assertEqual((self.claude / "settings.json").read_text(), text)
+
+    def test_read_only_settings_file_that_needs_no_change_is_fine(self):
+        self.assertEqual(self.run_kit(self.repo).returncode, 0)
+        os.chmod(self.claude / "settings.json", 0o444)
+        proc = self.run_kit(self.repo)  # nothing to write anywhere
+        self.assertEqual(proc.returncode, 0, proc.stderr)
 
 
 class TestRefusals(InstallRepoTestCase):
@@ -273,7 +464,8 @@ class TestRefusals(InstallRepoTestCase):
     def test_missing_kit_exits_1(self):
         proc = self.run_kit(self.repo, kit=self.tmp / "no-kit")
         self.assertEqual(proc.returncode, 1)
-        self.assertIn("kit", proc.stderr)
+        self.assertIn("router kit incomplete", proc.stderr)
+        self.assertEqual(self.tree(), [])
 
 
 class TestForeignAgents(InstallRepoTestCase):
@@ -339,10 +531,16 @@ class TestForeignAgents(InstallRepoTestCase):
         self.assertIn("builder.md", proc.stderr)
         self.assertEqual((self.claude / "agents" / "builder.md").read_text(), edited)
 
+    @unittest.skipUnless(shutil.which("git"), "git not available")
     def test_identical_preexisting_copy_is_accepted_silently(self):
+        subprocess.run(["git", "-C", str(self.repo), "init", "-q"], check=True, env=self.env())  # no "no .git" warning
         self.put_agent("scout.md", (KIT / "agents" / "scout.md").read_text())
         proc = self.run_kit(self.repo)
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stderr, "")
+        self.assertRegex(proc.stdout, r"unchanged\s+\.claude/agents/scout\.md")
+        self.assertNotRegex(proc.stdout, r"(backup|replaced)\s")
+        self.assertFalse(list((self.claude / "agents").glob("*.bak*")))
         self.assertInstalled()
 
     def test_corrupt_manifest_is_treated_as_empty(self):
@@ -384,6 +582,39 @@ class TestWarnings(InstallRepoTestCase):
         self.assertIn("warning:", proc.stderr)
         self.assertIn("git-ignored", proc.stderr)
         self.assertInstalled()
+
+    @unittest.skipUnless(shutil.which("git"), "git not available")
+    def test_only_the_ignored_paths_are_named(self):
+        self.assertEqual(self.git("init", "-q").returncode, 0)
+        (self.repo / ".gitignore").write_text(".claude/agents/scout.md\n")
+        proc = self.run_kit(self.repo)
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(proc.stderr.count("warning:"), 1)  # one warning, not one per path
+        self.assertIn(".claude/agents/scout.md", proc.stderr)
+        self.assertNotIn(".claude/settings.json", proc.stderr)
+        self.assertNotIn("agents/builder.md", proc.stderr)
+        self.assertIn("broken install", proc.stderr)
+        self.assertIn("hooks without the script", proc.stderr)
+        self.assertInstalled()
+
+    @unittest.skipUnless(shutil.which("git"), "git not available")
+    def test_ignored_script_or_policy_warns(self):
+        self.assertEqual(self.git("init", "-q").returncode, 0)
+        (self.repo / ".gitignore").write_text("*.py\nPOLICY.md\n")
+        proc = self.run_kit(self.repo)
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn(".claude/model-router/router_nudge.py", proc.stderr)
+        self.assertIn(".claude/model-router/POLICY.md", proc.stderr)
+        self.assertNotIn(".claude/settings.json", proc.stderr)
+
+    @unittest.skipUnless(shutil.which("git"), "git not available")
+    def test_ignored_settings_and_manifest_are_named(self):
+        self.assertEqual(self.git("init", "-q").returncode, 0)
+        (self.repo / ".gitignore").write_text("settings.json\nmanifest.json\n")
+        proc = self.run_kit(self.repo)
+        self.assertIn(".claude/settings.json", proc.stderr)
+        self.assertIn(".claude/model-router/manifest.json", proc.stderr)
+        self.assertIn("script without hooks", proc.stderr)
 
     @unittest.skipUnless(shutil.which("git"), "git not available")
     def test_install_never_stages_or_commits(self):

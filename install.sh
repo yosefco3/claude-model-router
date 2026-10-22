@@ -17,11 +17,14 @@ BIN_DIR="$HOME/.local/bin"
 
 mkdir -p "$DATA_DIR" "$BIN_DIR"
 
+# rm first: a symlinked dev setup (destination -> this checkout) makes cp fail with "same file"
+rm -f "$BIN_DIR/router"
 cp "$HERE/router" "$BIN_DIR/router"
 chmod +x "$BIN_DIR/router"
 echo "Installed CLI:   $BIN_DIR/router"
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) echo "  NOTE: $BIN_DIR is not on your PATH; add it or call it by full path.";; esac
 
+rm -f "$DATA_DIR/router_stats.py" "$DATA_DIR/router_kit.py"
 cp "$HERE/router_stats.py" "$HERE/router_kit.py" "$DATA_DIR/"
 echo "Installed tools: $DATA_DIR/router_stats.py, router_kit.py"
 

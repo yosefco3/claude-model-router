@@ -3,7 +3,8 @@
 #
 #   on / off      toggle the model router; the hook reads the flag on every
 #                 prompt, so no restart is needed
-#   status        on/off, and whether the plugin is installed
+#   status        on/off, and whether the plugin is installed (from the marketplace
+#                 or synced from claude.ai)
 #   stats         delegation and cost report from local transcripts
 #   install-repo  install the router into a repo's .claude/ for cloud sessions
 #                 (--force replaces agent files you edited, keeping a .bak)
@@ -12,7 +13,7 @@ set -euo pipefail
 CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 DATA_DIR="$CONFIG_DIR/model-router"
 
-usage() { echo "usage: router on|off|status|stats [--since D] [--json]|install-repo <path> [--force]"; exit 1; }
+usage() { echo "usage: router on|off|status|stats [--since D] [--json]|install-repo <path> [--force]" >&2; exit 1; }
 [ $# -ge 1 ] || usage
 
 case "$1" in
@@ -31,8 +32,12 @@ case "$1" in
     ;;
   status)
     if [ -e "$DATA_DIR/OFF" ]; then echo "off"; else echo "on"; fi
-    if grep -qF '"model-router@claude-model-router"' "$CONFIG_DIR/plugins/installed_plugins.json" 2>/dev/null; then
-      echo "plugin: installed"
+    INSTALLED="$CONFIG_DIR/plugins/installed_plugins.json"
+    if grep -qF '"model-router@claude-model-router"' "$INSTALLED" 2>/dev/null; then
+      echo "plugin: installed (claude-model-router)"
+    elif grep -qF '"model-router@synced"' "$INSTALLED" 2>/dev/null \
+         || compgen -G "$CONFIG_DIR/plugins/synced/model-router*/" > /dev/null; then
+      echo "plugin: installed (synced from claude.ai)"
     else
       echo "plugin: not installed"
     fi
