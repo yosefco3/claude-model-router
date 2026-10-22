@@ -1,44 +1,50 @@
 #!/usr/bin/env bash
-# router on|off|status  — toggle the model-routing policy in ~/.claude/CLAUDE.md
-# Applies to NEW claude sessions (CLAUDE.md is read at session start).
+# router on|off|status|stats [args]|install-repo <path> [--force]
+#
+#   on / off      toggle the model router; the hook reads the flag on every
+#                 prompt, so no restart is needed
+#   status        on/off, and whether the plugin is installed
+#   stats         delegation and cost report from local transcripts
+#   install-repo  install the router into a repo's .claude/ for cloud sessions
+#                 (--force replaces agent files you edited, keeping a .bak)
 set -euo pipefail
 
-CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
-DATA_DIR="$CLAUDE_DIR/model-router"
-START='<!-- model-router:start -->'
-END='<!-- model-router:end -->'
+CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+DATA_DIR="$CONFIG_DIR/model-router"
 
-usage() { echo "usage: router on|off|status"; exit 1; }
-[ $# -eq 1 ] || usage
-
-status() {
-  if ! [ -f "$CLAUDE_MD" ] || ! grep -qF "$START" "$CLAUDE_MD"; then
-    echo "not installed (run install.sh)"; return
-  fi
-  if grep -qF "Model routing policy: OFF" "$CLAUDE_MD"; then echo "off"; else echo "on"; fi
-}
-
-swap() {
-  local src="$1"
-  [ -f "$src" ] || { echo "missing $src — re-run install.sh"; exit 1; }
-  python3 - "$CLAUDE_MD" "$src" "$START" "$END" <<'PY'
-import sys, re
-path, src, start, end = sys.argv[1:5]
-text = open(path, encoding="utf-8").read() if __import__("os").path.exists(path) else ""
-block = open(src, encoding="utf-8").read().strip()
-pattern = re.compile(re.escape(start) + r".*?" + re.escape(end), re.S)
-if pattern.search(text):
-    text = pattern.sub(lambda m: block, text, count=1)
-else:
-    text = (text.rstrip() + "\n\n" if text.strip() else "") + block + "\n"
-open(path, "w", encoding="utf-8").write(text)
-PY
-}
+usage() { echo "usage: router on|off|status|stats [--since D] [--json]|install-repo <path> [--force]"; exit 1; }
+[ $# -ge 1 ] || usage
 
 case "$1" in
-  on)     swap "$DATA_DIR/ROUTING.md";     echo "routing: on  (takes effect in new claude sessions)";;
-  off)    swap "$DATA_DIR/ROUTING-OFF.md"; echo "routing: off (takes effect in new claude sessions)";;
-  status) status;;
+  on|off|status) [ $# -eq 1 ] || usage;;
+esac
+
+case "$1" in
+  on)
+    rm -f "$DATA_DIR/OFF"
+    echo "router: on  (applies from the next prompt, no restart needed)"
+    ;;
+  off)
+    mkdir -p "$DATA_DIR"
+    : > "$DATA_DIR/OFF"
+    echo "router: off (applies from the next prompt, no restart needed)"
+    ;;
+  status)
+    if [ -e "$DATA_DIR/OFF" ]; then echo "off"; else echo "on"; fi
+    if grep -qF '"model-router@claude-model-router"' "$CONFIG_DIR/plugins/installed_plugins.json" 2>/dev/null; then
+      echo "plugin: installed"
+    else
+      echo "plugin: not installed"
+    fi
+    ;;
+  stats)
+    shift
+    exec python3 "$DATA_DIR/router_stats.py" "$@"
+    ;;
+  install-repo)
+    shift
+    [ $# -ge 1 ] || usage
+    exec python3 "$DATA_DIR/router_kit.py" install-repo "$@"
+    ;;
   *) usage;;
 esac

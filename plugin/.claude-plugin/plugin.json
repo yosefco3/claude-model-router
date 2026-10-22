@@ -1,0 +1,12 @@
+{
+  "name": "model-router",
+  "version": "2.0.0",
+  "description": "Routing policy and cheap haiku/sonnet subagents (scout, mechanic, builder, test-writer, reviewer) that the main model delegates to by difficulty. Injected at session start via hooks.",
+  "author": {
+    "name": "yosefco3"
+  },
+  "homepage": "https://github.com/yosefco3/claude-model-router",
+  "repository": "https://github.com/yosefco3/claude-model-router",
+  "license": "MIT",
+  "keywords": ["model-router", "subagents", "delegation", "cost", "haiku", "sonnet", "routing"]
+}

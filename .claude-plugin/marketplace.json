@@ -1,0 +1,15 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-model-router",
+  "description": "Model router for Claude Code: delegate easy work to cheaper subagents.",
+  "owner": {
+    "name": "yosefco3"
+  },
+  "plugins": [
+    {
+      "name": "model-router",
+      "source": "./plugin",
+      "description": "Routing policy and cheap haiku/sonnet subagents (scout, mechanic, builder, test-writer, reviewer) that the main model delegates to by difficulty. Injected at session start, so it works in every Claude Code surface that loads plugins."
+    }
+  ]
+}
