@@ -39,8 +39,8 @@ FIRST, EVERY = 6, 10
 DELEGATION_TOOLS = {"Agent", "Task"}
 
 PROMPT_NUDGE = (
-    "Model router: ON. The user's routing policy (model-router) applies to this request: lookups go "
-    "to scout, fully specified edits to mechanic, bounded builds / tests / reviews to builder / "
+    "Model router: ON. The user's routing policy (model-router) applies to this request: lookups and "
+    "document reading/summarizing go to scout (never general-purpose), fully specified edits to mechanic, bounded builds / tests / reviews to builder / "
     "test-writer / reviewer (independent briefs in parallel). Design, debugging without a repro, "
     "risky changes and the user's own prose stay with the main model."
 )

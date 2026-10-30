@@ -5,7 +5,7 @@ Delegate-by-difficulty routing for [Claude Code](https://claude.com/claude-code)
 Usage on Max plans is metered by model cost, so every task a haiku or sonnet subagent does instead of the main model is quota you keep. This repo is a Claude Code **plugin + marketplace** that carries a routing policy into every Claude Code surface:
 
 - **Five subagents**: `scout` and `mechanic` on haiku, `builder`, `test-writer` and `reviewer` on sonnet. As a plugin they are listed as `model-router:scout`, `model-router:builder`, and so on.
-- **A routing policy** (`plugin/POLICY.md`) injected at session start by a hook. The main model delegates by tripwires (a lookup, a bounded build, a fully specified edit) and keeps architecture, unknown bugs, risky changes and your own prose for itself.
+- **A routing policy** (`plugin/POLICY.md`) injected at session start by a hook. The main model delegates by tripwires (a lookup or document read, a bounded build, a fully specified edit; `general-purpose` only where the router agents cannot do the job) and keeps architecture, unknown bugs, risky changes and your own prose for itself.
 - **Nudges**: a short reminder on every prompt, and a nudge after 6 read/search/shell/web tool calls since your last message or the last delegation (edits don't count), then every 10.
 - **A CLI**: `router on|off|status|stats|install-repo`.
 

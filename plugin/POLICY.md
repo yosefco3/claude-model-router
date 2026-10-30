@@ -8,10 +8,14 @@ Why it pays: per token, Haiku 5.5 costs about 1/40 of Opus 5.5 (1/100 of Fable 5
 
 ## Tripwires (act on them, don't deliberate)
 - About to open a 3rd file, grep a tree, or read a log just to locate or summarize something → send `scout` (haiku) the question instead.
+- About to launch `general-purpose` (or `Explore`, `Plan`, `claude`) → stop: that is almost always a `scout` or `builder` job (section below).
 - About to write a new script, function, endpoint or component whose behaviour you can state in a few sentences, or to fix a bug that has a known reproduction → `builder` (sonnet), with the spec and an acceptance command.
 - Fully specified edits (rename, config, boilerplate copied from a neighbour, docstrings, Hebrew RTL/bidi fixes) → `mechanic` (haiku).
 - Logic just landed → `test-writer`. About to commit more than one file → `reviewer`.
 - Several independent pieces → all briefs in one message, in parallel (run_in_background), and keep working on your own part meanwhile.
+
+## `general-purpose` is the exception, not the fallback
+`general-purpose`, `Explore`, `Plan` and `claude` are not router agents: every tool, no scope limit, no accounting, and in practice several times the cost of a `builder` run and ten times a `scout` run. Map the task first. Reading, locating, extracting or summarizing anything (code, logs, transcripts, long documents, book chapters) → `scout`, asked for a structured extract (key points, quotes with locations) rather than finished prose, which you then write yourself. Code to a statable spec → `builder`; mechanical edits → `mechanic`. Use `general-purpose` only for what the router agents cannot do (web search, browsing plus editing, a genuinely open-ended multi-step task), and then bound it: exact inputs, exact output, a length cap.
 
 ## Keep for yourself
 Architecture and data-model decisions; multi-file changes whose shape isn't known yet; debugging without a reproduction; auth, payments, migrations, deleting data; performance work; prose published in the user's voice (articles, book chapters, site text); talking with the user; anything one or two tool calls settle; checking a subagent's result.
